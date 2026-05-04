@@ -55,4 +55,4 @@ You **must** use a modern desktop browser with WebGPU enabled (Google Chrome, Mi
  * **Initial Model Caching:** The very first time you ask a question, the application will download the Llama 3.2 model weights into your browser's cache (approx. 800MB - 1GB). **This takes a few minutes depending on your internet speed.** Once cached, subsequent visits and queries will initialize almost instantly.
  * **Hardware Dependency:** Axiom-Zero leverages your device's GPU. Performance, token generation speed, and the ability to handle massive documents depend entirely on your local hardware. Apple Silicon (M1/M2/M3) and dedicated Nvidia/AMD GPUs will yield the best results.
 ## 📜 License
-This project is open-source and available under the MIT License.
+Currrently this Project's Liscence is not disclosed 
