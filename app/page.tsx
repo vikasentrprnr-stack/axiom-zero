@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { CreateMLCEngine, MLCEngine } from '@mlc-ai/web-llm';
-import { User, Activity, Zap, Sparkles, Copy, Square, CheckCheck, Menu, X, FileText, Trash2, Plus, ArrowRight, BrainCircuit, ChevronRight, RefreshCw, Pencil, Loader2, Database, Cpu, CheckCircle2, Share2, Download } from 'lucide-react';
+import { User, Activity, Zap, Sparkles, Copy, Square, CheckCheck, Menu, X, FileText, Trash2, Plus, ArrowRight, BrainCircuit, ChevronRight, RefreshCw, Pencil, Loader2, Database, Cpu, CheckCircle2, Share2, Download, HelpCircle, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import ReactMarkdown from 'react-markdown';
@@ -35,7 +35,6 @@ const TypingIndicator = () => (
   </div>
 );
 
-// === BULLETPROOF AST RENDERER ===
 const PremiumMarkdownRenderer = ({ content }: { content: string }) => {
   return (
     <div className="text-[15px] leading-relaxed font-open-sans text-neutral-200 w-full min-w-0 break-words">
@@ -162,6 +161,9 @@ export default function Home() {
   const [engineProgressPercent, setEngineProgressPercent] = useState(0);
   const [vectorProgress, setVectorProgress] = useState(0);
 
+  // === NEW: WebGPU Warning State ===
+  const [warningAccepted, setWarningAccepted] = useState<boolean | null>(null);
+
   const engineRef = useRef<MLCEngine | null>(null);
   const engineLockRef = useRef(false);
   const embedWorker = useRef<Worker | null>(null);
@@ -178,13 +180,22 @@ export default function Home() {
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages, streamingContent, isTyping, typingStatus]);
   useEffect(() => { getAllSavedDocuments().then(setSavedDocs); }, [appState]);
 
+  // Check localStorage on mount
+  useEffect(() => {
+    const accepted = localStorage.getItem('axiom_warning_accepted') === 'true';
+    setWarningAccepted(accepted);
+  }, []);
+
   useEffect(() => {
     if (currentDocId && messages.length > 0 && !isTyping) {
         updateDocumentMessages(currentDocId, messages);
     }
   }, [messages, currentDocId, isTyping]);
 
+  // === THE FIX: Gated Engine Initialization ===
   useEffect(() => {
+    // DO NOT boot the engine if the warning hasn't been accepted
+    if (warningAccepted !== true) return;
     if (engineLockRef.current) return;
     engineLockRef.current = true;
 
@@ -230,10 +241,9 @@ export default function Home() {
               return;
           }
           
-          // === THE FIX: Increased Chunk Allowance to 5 for better large-document coverage ===
           const chunks = documentVectorsRef.current
             .map(doc => ({ ...doc, score: cosineSimilarity(embedding, doc.embedding) }))
-            .filter(doc => doc.score > 0.15) // Slightly lower threshold to capture complex math phrasing
+            .filter(doc => doc.score > 0.15) 
             .sort((a,b) => b.score - a.score)
             .slice(0, 5); 
 
@@ -247,7 +257,6 @@ export default function Home() {
               return t.replace(/\s+/g, ' ').trim(); 
           }).join('\n\n---\n\n');
           
-          // === THE MASTER FIX: Increased Context Window to 8000 Chars (~1800 tokens) ===
           if (contextText.length > 8000) {
               contextText = contextText.substring(0, 8000) + "... [Truncated]"; 
           }
@@ -268,7 +277,6 @@ export default function Home() {
                 content: m.content.replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '').trim()
             }));
 
-            // === THE FIX: Simplified, 1B-Friendly Prompt Architecture ===
             const systemPrompt = `You are Axiom-Zero, a highly intelligent AI research engine.
 Your sole purpose is to answer the user's query using ONLY the provided DOCUMENT CONTEXT.
 
@@ -286,7 +294,7 @@ CRITICAL INSTRUCTIONS:
                     ...conversationHistory, 
                     { role: 'user', content: userPrompt }
                 ],
-                temperature: 0.2, // Slightly increased to prevent repetitive looping
+                temperature: 0.2, 
                 top_p: 0.9,       
                 max_tokens: 1500,
                 stream: true,
@@ -335,7 +343,7 @@ CRITICAL INSTRUCTIONS:
             embedWorker.current.terminate();
         }
     };
-  }, []);
+  }, [warningAccepted]); // Added dependency
 
   const handleIngestionComplete = async (chunks: TextChunk[], file: File) => {
     const buf = await file.arrayBuffer();
@@ -510,6 +518,56 @@ CRITICAL INSTRUCTIONS:
   return (
     <div className="flex h-screen w-screen bg-[#050505] text-white font-open-sans overflow-hidden">
       
+      {/* === NEW: WebGPU Hardware Warning Modal === */}
+      <AnimatePresence>
+        {warningAccepted === false && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-6">
+             <div className="bg-[#121212] border border-white/10 p-8 rounded-2xl shadow-2xl max-w-lg w-full">
+                <div className="flex items-center space-x-3 mb-5">
+                   <div className="p-3 bg-amber-500/10 rounded-full border border-amber-500/20">
+                      <AlertTriangle className="w-6 h-6 text-amber-500" />
+                   </div>
+                   <h2 className="font-outfit text-xl font-semibold text-white">System Resource Warning</h2>
+                </div>
+                
+                <div className="space-y-4 text-[14.5px] leading-relaxed text-neutral-300">
+                   <p>
+                     Axiom-Zero runs a 1B-parameter Large Language Model <strong>entirely on your local hardware</strong> via WebGPU. This ensures complete privacy, but it is highly computationally intensive.
+                   </p>
+                   
+                   <div className="bg-white/5 p-4 rounded-lg border border-white/5">
+                      <p className="font-semibold text-white mb-2 text-sm uppercase tracking-wide">Recommended Specifications:</p>
+                      <ul className="list-disc pl-5 space-y-1 text-sm text-neutral-400">
+                         <li>Modern Desktop Browser (Chrome, Edge, Brave)</li>
+                         <li>Dedicated GPU (Nvidia/AMD) or Apple Silicon (M1+)</li>
+                         <li>At least 8GB of System RAM</li>
+                      </ul>
+                   </div>
+
+                   <p className="text-sm text-neutral-400 italic">
+                     Caution: If you are running on an older device or on battery power, you may experience severe system slowdowns or rapid battery drain during AI generation.
+                   </p>
+                </div>
+
+                <div className="mt-8 flex items-center justify-end space-x-4">
+                   <button onClick={() => window.history.back()} className="px-5 py-2.5 text-sm font-medium text-neutral-400 hover:text-white transition-colors">
+                      Go Back
+                   </button>
+                   <button 
+                     onClick={() => {
+                       localStorage.setItem('axiom_warning_accepted', 'true');
+                       setWarningAccepted(true);
+                     }} 
+                     className="px-5 py-2.5 text-sm font-medium bg-emerald-500 text-black hover:bg-emerald-400 rounded-lg shadow-md transition-colors"
+                   >
+                      I Understand, Proceed
+                   </button>
+                </div>
+             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {isSidebarOpen && (
           <motion.div initial={{ width: 0, opacity: 0 }} animate={{ width: 280, opacity: 1 }} exit={{ width: 0, opacity: 0 }} transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.8 }} className="h-full border-r border-white/5 bg-[#0a0a0a] flex flex-col flex-shrink-0 relative z-40 shadow-2xl">
@@ -538,8 +596,14 @@ CRITICAL INSTRUCTIONS:
                 </div>
               ))}
             </div>
-            <div className="p-4 min-w-[280px]">
-              <button onClick={async () => { await clearDB(); setSavedDocs([]); clearWorkspace(); }} className="w-full flex items-center justify-center space-x-2 text-sm text-neutral-500 hover:text-red-400 py-3 rounded-lg transition-all"><Trash2 className="w-4 h-4" /><span>Clear Device Cache</span></button>
+            
+            {/* === NEW: Help Page Link & Cache Button block === */}
+            <div className="p-4 min-w-[280px] space-y-2 border-t border-white/5">
+              <a href="/help" target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center space-x-2 text-sm text-neutral-400 hover:text-white py-2.5 rounded-lg transition-all hover:bg-white/5">
+                <HelpCircle className="w-4 h-4" />
+                <span>Help & Documentation</span>
+              </a>
+              <button onClick={async () => { await clearDB(); setSavedDocs([]); clearWorkspace(); }} className="w-full flex items-center justify-center space-x-2 text-sm text-neutral-500 hover:text-red-400 py-2.5 rounded-lg transition-all hover:bg-red-500/10"><Trash2 className="w-4 h-4" /><span>Clear Device Cache</span></button>
             </div>
           </motion.div>
         )}
@@ -659,7 +723,7 @@ CRITICAL INSTRUCTIONS:
                                           <div className="mt-3 grid grid-cols-1 gap-3 border-l-2 border-white/10 pl-4 ml-1">
                                              {streamingSources.map((src, i) => (
                                                 <div key={`stream-source-${i}`} className="flex flex-col space-y-1">
-                                                   <button onClick={() => pdfViewerRef.current?.setPage(src.pageNumber)} className="w-fit text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded uppercase font-semibold hover:bg-emerald-500/20 transition-colors">Page {src.pageNumber}</button>
+                                                    <button onClick={() => pdfViewerRef.current?.setPage(src.pageNumber)} className="w-fit text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded uppercase font-semibold hover:bg-emerald-500/20 transition-colors">Page {src.pageNumber}</button>
                                                    <p className="text-sm text-neutral-400 leading-relaxed line-clamp-3">"{src.text}"</p>
                                                 </div>
                                              ))}
@@ -710,4 +774,5 @@ CRITICAL INSTRUCTIONS:
     </div>
   );
 }
+
 
