@@ -91,7 +91,6 @@ const PremiumMarkdownRenderer = ({ content }: { content: string }) => {
   );
 };
 
-// === DYNAMIC CHAIN OF THOUGHT RENDERER ===
 const MessageWithThinking = ({ content }: { content: string }) => {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -156,7 +155,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const [leftWidth, setLeftWidth] = useState(40); // Default 40% width for PDF
+  const [leftWidth, setLeftWidth] = useState(40); 
 
   const [engineReady, setEngineReady] = useState(false);
   const [engineProgressText, setEngineProgressText] = useState('Initializing Engine...');
@@ -231,11 +230,12 @@ export default function Home() {
               return;
           }
           
+          // === THE FIX: Increased Chunk Allowance to 5 for better large-document coverage ===
           const chunks = documentVectorsRef.current
             .map(doc => ({ ...doc, score: cosineSimilarity(embedding, doc.embedding) }))
-            .filter(doc => doc.score > 0.18)
+            .filter(doc => doc.score > 0.15) // Slightly lower threshold to capture complex math phrasing
             .sort((a,b) => b.score - a.score)
-            .slice(0, 3); 
+            .slice(0, 5); 
 
           let contextText = chunks.map((c: any) => {
               let t = c.text;
@@ -247,8 +247,9 @@ export default function Home() {
               return t.replace(/\s+/g, ' ').trim(); 
           }).join('\n\n---\n\n');
           
-          if (contextText.length > 1500) {
-              contextText = contextText.substring(0, 1500) + "... [Truncated]"; 
+          // === THE MASTER FIX: Increased Context Window to 8000 Chars (~1800 tokens) ===
+          if (contextText.length > 8000) {
+              contextText = contextText.substring(0, 8000) + "... [Truncated]"; 
           }
 
           try {
@@ -260,20 +261,22 @@ export default function Home() {
             let hasReceivedToken = false;
             const watchdog = setTimeout(() => {
                 if (!hasReceivedToken && abortControllerRef.current) abortControllerRef.current.abort();
-            }, 20000); 
+            }, 30000); 
 
             const conversationHistory = messagesRef.current.slice(-4).map(m => ({
                 role: m.role as "user" | "assistant",
                 content: m.content.replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '').trim()
             }));
 
-            const systemPrompt = `You are Axiom-Zero, an elite AI research engine.
-Follow these absolute directives:
-1. GROUNDING: Answer the user's question using ONLY the facts provided in the DOCUMENT CONTEXT. If the context does not contain the answer, output exactly: "The provided document does not contain sufficient information to answer this question." Do NOT hallucinate.
-2. DYNAMIC ROUTING:
-   - If the user's question is about history, literature, or theoretical concepts: Answer normally using plain text, beautiful markdown headings, and bullet points. DO NOT use <think> tags. DO NOT output code blocks unless explicitly requested.
-   - If the user's question is about programming, algorithms, mathematics, or explicit code generation: You MUST use <think>...</think> tags to reason step-by-step FIRST, and then output your final answer with proper code blocks (\`\`\`python) and LaTeX math ($$).
-3. CLEANLINESS: Do not add meta-commentary like "Note: This is based on the document." Just provide the direct answer.`;
+            // === THE FIX: Simplified, 1B-Friendly Prompt Architecture ===
+            const systemPrompt = `You are Axiom-Zero, a highly intelligent AI research engine.
+Your sole purpose is to answer the user's query using ONLY the provided DOCUMENT CONTEXT.
+
+CRITICAL INSTRUCTIONS:
+1. Provide a direct, detailed answer based on the context. Do not make up information.
+2. If the user asks a theoretical question, use standard text, bullet points, and headers.
+3. If the user asks a complex physics, math, or coding question, you MUST use <think>...</think> tags to reason step-by-step first, then output the final code/math below it using proper formatting (\`\`\` for code, $$ for math).
+4. NEVER append disclaimers, warnings, or notes like "Note: The provided document does not contain..." to the end of your valid responses. Just provide the answer and stop.`;
 
             const userPrompt = `DOCUMENT CONTEXT:\n${contextText}\n\nCURRENT QUESTION: ${latestQueryRef.current}\n\nANSWER:`;
 
@@ -283,7 +286,7 @@ Follow these absolute directives:
                     ...conversationHistory, 
                     { role: 'user', content: userPrompt }
                 ],
-                temperature: 0.1, 
+                temperature: 0.2, // Slightly increased to prevent repetitive looping
                 top_p: 0.9,       
                 max_tokens: 1500,
                 stream: true,
@@ -303,7 +306,7 @@ Follow these absolute directives:
             setMessages(prev => [...prev, { 
                 id: `ai-${Date.now()}`, 
                 role: 'assistant', 
-                content: fullResponse || "I could not generate a comprehensive answer based on this document.", 
+                content: fullResponse || "I could not generate an answer. Please rephrase the question.", 
                 sources: chunks 
             } as ChatMessage]);
 
@@ -327,7 +330,6 @@ Follow these absolute directives:
       }
     };
 
-    // PRODUCTION FIX: Prevent Ghost WebWorkers in the background on component unmount
     return () => {
         if (embedWorker.current) {
             embedWorker.current.terminate();
@@ -464,7 +466,6 @@ Follow these absolute directives:
     setAppState('ready'); setMessages([]); setActivePdfDocument(null); setCurrentDocId('');
   };
 
-  // === PRODUCTION FIX: 60FPS Drag Resizer Loop ===
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     document.body.style.cursor = 'col-resize';
@@ -568,7 +569,6 @@ Follow these absolute directives:
         ) : (
            <div className="flex-1 flex flex-row overflow-hidden relative w-full">
               
-              {/* Resizable PDF Side */}
               <div 
                   className="hidden lg:flex h-full border-r border-white/5 flex-col bg-[#050505] shrink-0" 
                   style={{ width: `${leftWidth}%` }}
@@ -576,7 +576,6 @@ Follow these absolute directives:
                  <DocumentView ref={pdfViewerRef} pdfDocument={activePdfDocument} documentName={currentDocName} />
               </div>
               
-              {/* Drag Handle */}
               <div 
                  className="hidden lg:flex w-2 cursor-col-resize hover:bg-emerald-500/50 active:bg-emerald-500 transition-colors shrink-0 z-20 items-center justify-center group"
                  onMouseDown={handleMouseDown}
@@ -584,7 +583,6 @@ Follow these absolute directives:
                  <div className="w-0.5 h-8 bg-white/10 rounded-full group-hover:bg-white/50 transition-colors" />
               </div>
               
-              {/* Chat Side */}
               <div className="flex-1 flex flex-col h-full min-w-0 bg-[#050505] relative z-10">
                  <div className="flex-1 overflow-y-auto p-6 lg:p-8 scrollbar-hide">
                     <div className="max-w-3xl mx-auto space-y-8">
@@ -712,3 +710,4 @@ Follow these absolute directives:
     </div>
   );
 }
+
