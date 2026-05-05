@@ -6,7 +6,7 @@ Unlike traditional AI wrappers, Axiom-Zero requires **no API keys, no cloud serv
  * **Zero-Latency Local LLM:** Runs Llama 3.2 entirely in the browser using @mlc-ai/web-llm, utilizing local GPU acceleration for fast, private inference.
  * **100% Client-Side RAG:** Full PDF ingestion, semantic chunking, and vector search executed on-device without external database calls.
  * **Dynamic Context Routing:** The system intelligently classifies user queries. For history/theory, it generates standard markdown. For programming/math, it triggers a DeepSeek-style <think> Chain-of-Thought reasoning loop before generating exact code blocks or LaTeX equations.
- * **Apple-Grade UI/UX:** Built with Framer Motion spring physics, featuring buttery-smooth 60fps draggable split-panes, hover-reveal menus, and real-time processing indicators.
+ * **Seamless UI/UX:** Built with Framer Motion spring physics, featuring buttery-smooth 60fps draggable split-panes, hover-reveal menus, and real-time processing indicators.
  * **Premium AST Markdown Rendering:** Flawlessly renders syntax-highlighted code blocks (via Prism) and mathematical formulas (via KaTeX).
  * **Persistent Local Memory:** Caches vectorized documents and conversational history securely in the browser's IndexedDB, allowing users to switch contexts instantly.
 ##  System Architecture & RAG Pipeline
