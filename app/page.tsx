@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { CreateMLCEngine, MLCEngine } from '@mlc-ai/web-llm';
-import { User, Activity, Zap, Sparkles, Copy, Square, CheckCheck, Menu, X, FileText, Trash2, Plus, ArrowRight, BrainCircuit, ChevronRight, RefreshCw, Pencil, Loader2, Database, Cpu, CheckCircle2, Share2, Download, HelpCircle, AlertTriangle } from 'lucide-react';
+import { Zap, Sparkles, Copy, Square, CheckCheck, Menu, X, FileText, Trash2, Plus, ArrowRight, BrainCircuit, ChevronRight, RefreshCw, Pencil, Loader2, Database, Cpu, CheckCircle2, Share2, Download, HelpCircle, AlertTriangle, Settings2, SlidersHorizontal, CheckCircle, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import ReactMarkdown from 'react-markdown';
@@ -20,6 +20,31 @@ import { DocumentViewerHandle } from '@/components/DocumentView';
 const FileDropzone = dynamic(() => import('@/components/FileDropzone'), { ssr: false });
 const DocumentView = dynamic(() => import('@/components/DocumentView'), { ssr: false });
 
+// === VERIFIED GEMMA & LLAMA ARCHITECTURE ===
+const AI_MODELS = {
+  'low': { 
+      id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', 
+      name: 'Llama 3.2 (1B)', 
+      desc: 'Maximum Speed • Basic RAG', 
+      vram: '~850MB', 
+      minRam: '4GB System RAM' 
+  },
+  'mid': { 
+      id: 'gemma-2-2b-it-q4f16_1-MLC', 
+      name: 'Gemma 2 (2B)', 
+      desc: 'Balanced • High Accuracy', 
+      vram: '~1.6GB', 
+      minRam: '8GB System RAM' 
+  },
+  'high': { 
+      id: 'gemma-3-4b-it-q4f16_1-MLC', 
+      name: 'Gemma 3 (4B)', 
+      desc: 'Elite Intelligence • Heavy', 
+      vram: '~2.6GB', 
+      minRam: '16GB System RAM' 
+  }
+};
+
 const ProcessingIndicator = ({ status }: { status: string }) => (
   <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="flex items-center space-x-3 text-emerald-500 bg-emerald-500/10 px-4 py-2 rounded-full w-fit mb-2 shadow-sm border border-emerald-500/20">
     <Loader2 className="w-4 h-4 animate-spin" />
@@ -35,6 +60,7 @@ const TypingIndicator = () => (
   </div>
 );
 
+// AST RENDERER
 const PremiumMarkdownRenderer = ({ content }: { content: string }) => {
   return (
     <div className="text-[15px] leading-relaxed font-open-sans text-neutral-200 w-full min-w-0 break-words">
@@ -54,13 +80,7 @@ const PremiumMarkdownRenderer = ({ content }: { content: string }) => {
                   <div className="flex items-center px-4 py-2.5 bg-[#1a1a1a] border-b border-white/5">
                     <span className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest font-semibold">{language}</span>
                   </div>
-                  <SyntaxHighlighter
-                    {...props}
-                    style={vscDarkPlus}
-                    language={language}
-                    PreTag="div"
-                    customStyle={{ margin: 0, padding: '1.25rem', background: 'transparent', fontSize: '13.5px', lineHeight: '1.6' }}
-                  >
+                  <SyntaxHighlighter {...props} style={vscDarkPlus} language={language} PreTag="div" customStyle={{ margin: 0, padding: '1.25rem', background: 'transparent', fontSize: '13.5px', lineHeight: '1.6' }}>
                     {safeCodeText}
                   </SyntaxHighlighter>
                 </div>
@@ -92,7 +112,6 @@ const PremiumMarkdownRenderer = ({ content }: { content: string }) => {
 
 const MessageWithThinking = ({ content }: { content: string }) => {
   const [isOpen, setIsOpen] = useState(false);
-
   let thoughtProcess = "";
   let finalAnswer = content;
   
@@ -126,12 +145,7 @@ const MessageWithThinking = ({ content }: { content: string }) => {
            </AnimatePresence>
         </div>
       )}
-      
-      {finalAnswer ? (
-        <PremiumMarkdownRenderer content={finalAnswer} />
-      ) : (
-        <TypingIndicator />
-      )}
+      {finalAnswer ? <PremiumMarkdownRenderer content={finalAnswer} /> : <TypingIndicator />}
     </div>
   );
 };
@@ -161,11 +175,13 @@ export default function Home() {
   const [engineProgressPercent, setEngineProgressPercent] = useState(0);
   const [vectorProgress, setVectorProgress] = useState(0);
 
-  // === NEW: WebGPU Warning State ===
   const [warningAccepted, setWarningAccepted] = useState<boolean | null>(null);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [detectedTier, setDetectedTier] = useState<'low' | 'mid' | 'high'>('low');
+  const [activeModelKey, setActiveModelKey] = useState<'low' | 'mid' | 'high'>('low');
+  const [isTopDropdownOpen, setIsTopDropdownOpen] = useState(false);
 
   const engineRef = useRef<MLCEngine | null>(null);
-  const engineLockRef = useRef(false);
   const embedWorker = useRef<Worker | null>(null);
   const documentVectorsRef = useRef<any[]>([]);
   const latestQueryRef = useRef('');
@@ -180,10 +196,28 @@ export default function Home() {
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages, streamingContent, isTyping, typingStatus]);
   useEffect(() => { getAllSavedDocuments().then(setSavedDocs); }, [appState]);
 
-  // Check localStorage on mount
   useEffect(() => {
-    const accepted = localStorage.getItem('axiom_warning_accepted') === 'true';
-    setWarningAccepted(accepted);
+    const checkHardware = async () => {
+      let tier: 'low' | 'mid' | 'high' = 'low';
+      const nav = navigator as any; 
+      if (nav.gpu) {
+        try {
+          const adapter = await nav.gpu.requestAdapter();
+          if (adapter) {
+            const maxBindingSize = adapter.limits.maxStorageBufferBindingSize;
+            if (maxBindingSize >= 1073741824) { tier = 'high'; } 
+            else if (maxBindingSize >= 536870912) { tier = 'mid'; } 
+          }
+        } catch (e) { console.error("WebGPU check failed.", e); }
+      }
+      setDetectedTier(tier);
+      const accepted = localStorage.getItem('axiom_warning_accepted') === 'true';
+      const savedModel = localStorage.getItem('axiom_selected_model') as 'low' | 'mid' | 'high';
+      const finalModel = AI_MODELS[savedModel] ? savedModel : tier;
+      setActiveModelKey(finalModel);
+      setWarningAccepted(accepted);
+    };
+    checkHardware();
   }, []);
 
   useEffect(() => {
@@ -192,30 +226,37 @@ export default function Home() {
     }
   }, [messages, currentDocId, isTyping]);
 
-  // === THE FIX: Gated Engine Initialization ===
+  // === FIX 1: THE ENGINE INITIALIZER GLITCH PATCH ===
+  const initWebLLM = useCallback(async (modelKey: 'low' | 'mid' | 'high') => {
+    setEngineReady(false);
+    try {
+      const newEngine = await CreateMLCEngine(AI_MODELS[modelKey].id, { 
+          initProgressCallback: (progress) => {
+             setEngineProgressText(progress.text);
+             setEngineProgressPercent(Math.round(progress.progress * 100) || 0);
+          }
+      });
+      engineRef.current = newEngine;
+      setEngineReady(true);
+      // NOTE: We DO NOT force appState to 'active' here anymore. 
+      // It stays 'ready' (Dropzone) until a PDF is actually uploaded.
+    } catch (err: any) {
+      console.error("WebGPU Boot Crash:", err);
+      localStorage.removeItem('axiom_selected_model');
+      localStorage.removeItem('axiom_warning_accepted');
+      setEngineProgressText("Engine Crash. Reseting configuration...");
+      alert(`Fatal Error: ${err.message}. \n\nThe system has wiped the corrupted cache. The page will now refresh.`);
+      window.location.reload();
+    }
+  }, []);
+
   useEffect(() => {
-    // DO NOT boot the engine if the warning hasn't been accepted
-    if (warningAccepted !== true) return;
-    if (engineLockRef.current) return;
-    engineLockRef.current = true;
+    if (warningAccepted === true && !engineRef.current && !showSettingsModal) {
+        initWebLLM(activeModelKey);
+    }
+  }, [warningAccepted, showSettingsModal, activeModelKey, initWebLLM]);
 
-    const initWebLLM = async () => {
-      try {
-        const newEngine = await CreateMLCEngine("Llama-3.2-1B-Instruct-q4f16_1-MLC", { 
-            initProgressCallback: (progress) => {
-               setEngineProgressText(progress.text);
-               setEngineProgressPercent(Math.round(progress.progress * 100) || 0);
-            }
-        });
-        engineRef.current = newEngine;
-        setEngineReady(true);
-      } catch (err) {
-        console.error("WebGPU Boot Crash:", err);
-        setEngineProgressText("GPU Initialization Failed.");
-      }
-    };
-    initWebLLM();
-
+  useEffect(() => {
     embedWorker.current = new Worker(new URL('../lib/embeddingWorker.ts', import.meta.url), { type: 'module' });
     
     embedWorker.current.onmessage = async (e: MessageEvent) => {
@@ -229,10 +270,10 @@ export default function Home() {
         case 'EMBED_COMPLETE': 
             setVectorProgress(100); 
             documentVectorsRef.current = vectors; 
-            setTimeout(() => setAppState('active'), 500);
+            setTimeout(() => setAppState('active'), 500); // Only switch to active when PDF vectors are done
             break;
         case 'QUERY_EMBEDDED':
-          setTypingStatus('Retrieving context mapping...');
+          setTypingStatus('Executing Hybrid Retrieval...');
           const currentEngine = engineRef.current;
           
           if (!currentEngine) {
@@ -241,30 +282,40 @@ export default function Home() {
               return;
           }
           
-          const chunks = documentVectorsRef.current
-            .map(doc => ({ ...doc, score: cosineSimilarity(embedding, doc.embedding) }))
-            .filter(doc => doc.score > 0.15) 
-            .sort((a,b) => b.score - a.score)
-            .slice(0, 5); 
+          const denseResults = documentVectorsRef.current
+            .map(doc => ({ ...doc, denseScore: cosineSimilarity(embedding, doc.embedding) }))
+            .filter(doc => doc.denseScore > 0.12)
+            .sort((a,b) => b.denseScore - a.denseScore)
+            .slice(0, 15); 
 
-          let contextText = chunks.map((c: any) => {
+          const queryTerms = latestQueryRef.current.toLowerCase().split(/\W+/).filter(t => t.length > 3);
+          const finalChunks = denseResults.map(doc => {
+             const textLower = doc.text.toLowerCase();
+             let lexicalScore = 0;
+             queryTerms.forEach(term => {
+                const regex = new RegExp(`\\b${term}\\b`, 'g');
+                const matches = textLower.match(regex);
+                if (matches) lexicalScore += matches.length * 0.05; 
+             });
+             return { ...doc, finalScore: doc.denseScore + lexicalScore };
+          })
+          .sort((a,b) => b.finalScore - a.finalScore)
+          .slice(0, 4); 
+
+          // === FIX 2: AGGRESSIVE HTML SANITIZER FOR CHUNKS ===
+          let contextText = finalChunks.map((c: any) => {
               let t = c.text;
-              t = t.replace(/(?:[A-Z]+\s*\|\s*)+[A-Z]+/g, ' '); 
-              t = t.replace(/(www\.[^\s]+|https?:\/\/[^\s]+)/gi, ''); 
-              t = t.replace(/\b\d{10}\b/g, ''); 
-              t = t.replace(/©\s*[A-Za-z\s]+/gi, ''); 
-              t = t.replace(/Student Notes:/gi, ''); 
+              t = t.replace(/<[^>]*>/g, ''); // Strip ALL raw HTML tags (like <br>) from the PDF text
+              t = t.replace(/\bAnswer:\s*/gi, ''); // Strip literal "Answer:" words that confuse the AI
               return t.replace(/\s+/g, ' ').trim(); 
           }).join('\n\n---\n\n');
-          
-          if (contextText.length > 8000) {
-              contextText = contextText.substring(0, 8000) + "... [Truncated]"; 
-          }
+
+          if (contextText.length > 6000) contextText = contextText.substring(0, 6000) + "... [Truncated]"; 
 
           try {
             abortControllerRef.current = new AbortController();
             setStreamingContent('');
-            setStreamingSources(chunks);
+            setStreamingSources(finalChunks);
             setTypingStatus('Synthesizing neural response...');
             
             let hasReceivedToken = false;
@@ -277,16 +328,17 @@ export default function Home() {
                 content: m.content.replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '').trim()
             }));
 
-            const systemPrompt = `You are Axiom-Zero, a highly intelligent AI research engine.
-Your sole purpose is to answer the user's query using ONLY the provided DOCUMENT CONTEXT.
+            // === FIX 3: BULLETPROOF SYSTEM PROMPT ===
+            const systemPrompt = `You are Axiom-Zero, an elite AI research engine. 
+Your ONLY goal is to answer the user's question using the provided DOCUMENT CONTEXT.
 
-CRITICAL INSTRUCTIONS:
-1. Provide a direct, detailed answer based on the context. Do not make up information.
-2. If the user asks a theoretical question, use standard text, bullet points, and headers.
-3. If the user asks a complex physics, math, or coding question, you MUST use <think>...</think> tags to reason step-by-step first, then output the final code/math below it using proper formatting (\`\`\` for code, $$ for math).
-4. NEVER append disclaimers, warnings, or notes like "Note: The provided document does not contain..." to the end of your valid responses. Just provide the answer and stop.`;
+CRITICAL DIRECTIVES:
+1. EXHAUSTIVE SYNTHESIS: Provide deep, highly detailed, and comprehensive answers. Do not give short summaries. Extract every relevant detail from the context.
+2. THEORETICAL DEPTH: If asked a definitional question (e.g., "What is X?"), explain what it is, how it works, and provide contextual examples from the document.
+3. USE REASONING: Always begin your response by wrapping your internal thought process in <think> ... </think> tags to analyze the facts.
+4. FORMATTING RULES: NEVER use raw HTML tags like <br>. NEVER prefix your response with words like "Answer:". Use pure, clean Markdown.`;
 
-            const userPrompt = `DOCUMENT CONTEXT:\n${contextText}\n\nCURRENT QUESTION: ${latestQueryRef.current}\n\nANSWER:`;
+            const userPrompt = `DOCUMENT CONTEXT:\n${contextText}\n\nUSER QUESTION: ${latestQueryRef.current}\n\nTHINK AND ANSWER:`;
 
             const chunksStream = await currentEngine.chat.completions.create({
                 messages: [
@@ -294,7 +346,7 @@ CRITICAL INSTRUCTIONS:
                     ...conversationHistory, 
                     { role: 'user', content: userPrompt }
                 ],
-                temperature: 0.2, 
+                temperature: 0.1, 
                 top_p: 0.9,       
                 max_tokens: 1500,
                 stream: true,
@@ -308,42 +360,38 @@ CRITICAL INSTRUCTIONS:
                fullResponse += chunk.choices[0]?.delta?.content || '';
                setStreamingContent(fullResponse); 
             }
-            
             clearTimeout(watchdog);
             
             setMessages(prev => [...prev, { 
-                id: `ai-${Date.now()}`, 
-                role: 'assistant', 
-                content: fullResponse || "I could not generate an answer. Please rephrase the question.", 
-                sources: chunks 
+                id: `ai-${Date.now()}`, role: 'assistant', content: fullResponse || "I could not generate an answer.", sources: finalChunks 
             } as ChatMessage]);
 
           } catch (err: any) {
-             console.error("AI Generation Failed", err);
-             setMessages(prev => [...prev, { 
-                 id: `ai-${Date.now()}`, 
-                 role: 'assistant', 
-                 content: err.name === 'AbortError' 
-                    ? "System Error: The AI generation was stopped by user or timed out." 
-                    : `System Error: ${err.message || 'Engine crash.'}`, 
-                 sources: [] 
-             } as ChatMessage]);
+             setMessages(prev => [...prev, { id: `ai-${Date.now()}`, role: 'assistant', content: `System Error: ${err.message}`, sources: [] } as ChatMessage]);
           } finally {
-             setStreamingContent('');
-             setStreamingSources([]);
-             setTypingStatus('');
-             setIsTyping(false);
+             setStreamingContent(''); setStreamingSources([]); setTypingStatus(''); setIsTyping(false);
           }
           break;
       }
     };
 
-    return () => {
-        if (embedWorker.current) {
-            embedWorker.current.terminate();
-        }
-    };
-  }, [warningAccepted]); // Added dependency
+    return () => { if (embedWorker.current) embedWorker.current.terminate(); };
+  }, []);
+
+  const handleModelSwap = async (newModelKey: 'low' | 'mid' | 'high') => {
+      if (newModelKey === activeModelKey || !engineReady) return;
+      setActiveModelKey(newModelKey);
+      setIsTopDropdownOpen(false); 
+      localStorage.setItem('axiom_selected_model', newModelKey);
+      setEngineReady(false);
+      setEngineProgressText('Unloading previous model from VRAM...');
+      
+      if (engineRef.current) {
+          try { await engineRef.current.unload(); } catch(e) {}
+          engineRef.current = null;
+      }
+      initWebLLM(newModelKey);
+  };
 
   const handleIngestionComplete = async (chunks: TextChunk[], file: File) => {
     const buf = await file.arrayBuffer();
@@ -375,9 +423,7 @@ CRITICAL INSTRUCTIONS:
     const currentMsgs = messagesRef.current;
     const lastUserMessage = [...currentMsgs].reverse().find(m => m.role === 'user');
     
-    if (lastUserMessage && searchQuery.split(' ').length < 8) {
-        vectorSearchQuery = `${lastUserMessage.content} ${searchQuery}`; 
-    }
+    if (lastUserMessage && searchQuery.split(' ').length < 8) vectorSearchQuery = `${lastUserMessage.content} ${searchQuery}`; 
     executeSearch(searchQuery, vectorSearchQuery);
   };
 
@@ -387,18 +433,12 @@ CRITICAL INSTRUCTIONS:
     if (msgIndex <= 0) return;
     
     const userQuery = messages[msgIndex - 1].content;
-    const newMessages = messages.slice(0, msgIndex);
-    setMessages(newMessages);
-    
+    setMessages(messages.slice(0, msgIndex));
     let vectorSearchQuery = userQuery;
-    const previousUserMsg = [...newMessages.slice(0, -1)].reverse().find(m => m.role === 'user');
-    if (previousUserMsg && userQuery.split(' ').length < 8) {
-        vectorSearchQuery = `${previousUserMsg.content} ${userQuery}`;
-    }
+    const previousUserMsg = [...messages.slice(0, msgIndex - 1)].reverse().find(m => m.role === 'user');
+    if (previousUserMsg && userQuery.split(' ').length < 8) vectorSearchQuery = `${previousUserMsg.content} ${userQuery}`;
     
-    setIsTyping(true);
-    setTypingStatus('Re-analyzing query...');
-    latestQueryRef.current = userQuery;
+    setIsTyping(true); setTypingStatus('Re-analyzing query...'); latestQueryRef.current = userQuery;
     embedWorker.current?.postMessage({ type: 'EMBED_QUERY', text: vectorSearchQuery });
   };
 
@@ -406,55 +446,29 @@ CRITICAL INSTRUCTIONS:
     if (isTyping) return;
     const msgIndex = messages.findIndex(m => m.id === msgId);
     if (msgIndex < 0) return;
-    const query = messages[msgIndex].content;
+    setSearchQuery(messages[msgIndex].content);
     setMessages(messages.slice(0, msgIndex)); 
-    setSearchQuery(query);
     inputRef.current?.focus();
   };
 
   const copyToClipboard = (text: string, id: string) => { 
-      const cleanText = text.replace(/<think>[\s\S]*?(?:<\/think>|$)/, '').trim();
-      navigator.clipboard.writeText(cleanText); 
+      navigator.clipboard.writeText(text.replace(/<think>[\s\S]*?(?:<\/think>|$)/, '').trim()); 
       setCopiedId(id); setTimeout(() => setCopiedId(null), 2000); 
   };
   
   const stopGeneration = () => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
-    setTypingStatus('');
-    setIsTyping(false);
-  };
-
-  const exportChat = (e: React.MouseEvent, doc: any) => {
-    e.stopPropagation();
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(doc.messages || [], null, 2));
-    const downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute("href",     dataStr);
-    downloadAnchorNode.setAttribute("download", `${doc.name.replace(/\s+/g, '_')}_chat.json`);
-    document.body.appendChild(downloadAnchorNode);
-    downloadAnchorNode.click();
-    downloadAnchorNode.remove();
-  };
-
-  const shareChat = (e: React.MouseEvent, doc: any) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(`https://axiom-zero.local/share/${doc.id}`);
-    alert(`Secure share link for ${doc.name} copied to clipboard!`);
+    setTypingStatus(''); setIsTyping(false);
   };
 
   const deleteChat = async (e: React.MouseEvent, doc: any) => {
     e.stopPropagation();
     try {
         setSavedDocs(prev => prev.filter(d => d.id !== doc.id));
-        if (currentDocId === doc.id) {
-            clearWorkspace();
-        }
+        if (currentDocId === doc.id) clearWorkspace();
         const db = await import('@/utils/db');
-        if ((db as any).deleteDocument) {
-            await (db as any).deleteDocument(doc.id);
-        }
-    } catch (err) {
-        console.error("Deletion handled locally.");
-    }
+        if ((db as any).deleteDocument) await (db as any).deleteDocument(doc.id);
+    } catch (err) {}
   };
 
   const handleLoadDocument = useCallback(async (doc: any) => {
@@ -470,18 +484,14 @@ CRITICAL INSTRUCTIONS:
     } catch (e) { alert("Failed to load document."); }
   }, []);
 
-  const clearWorkspace = () => {
-    setAppState('ready'); setMessages([]); setActivePdfDocument(null); setCurrentDocId('');
-  };
+  const clearWorkspace = () => { setAppState('ready'); setMessages([]); setActivePdfDocument(null); setCurrentDocId(''); };
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     document.body.style.cursor = 'col-resize';
     let animationFrameId: number;
-    
     const handleMouseMove = (moveEvent: MouseEvent) => {
        if (animationFrameId) cancelAnimationFrame(animationFrameId);
-       
        animationFrameId = requestAnimationFrame(() => {
            let newWidth = (moveEvent.clientX / window.innerWidth) * 100;
            if (newWidth < 25) newWidth = 25;
@@ -489,28 +499,20 @@ CRITICAL INSTRUCTIONS:
            setLeftWidth(newWidth);
        });
     };
-    
     const handleMouseUp = () => {
        document.body.style.cursor = 'default';
        if (animationFrameId) cancelAnimationFrame(animationFrameId);
        window.removeEventListener('mousemove', handleMouseMove);
        window.removeEventListener('mouseup', handleMouseUp);
     };
-    
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
   }, []);
 
   const getStatusBadge = () => {
-    if (!engineReady) {
-      return { text: 'Occupying System', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20', Icon: Cpu, spin: true };
-    }
-    if (appState === 'ready') {
-      return { text: 'Ready', color: 'text-blue-400 bg-blue-400/10 border-blue-400/20', Icon: Database, spin: false };
-    }
-    if (appState === 'initializing') {
-      return { text: 'Initializing', color: 'text-purple-400 bg-purple-400/10 border-purple-400/20', Icon: Loader2, spin: true };
-    }
+    if (!engineReady) return { text: 'Occupying System', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20', Icon: Cpu, spin: true };
+    if (appState === 'ready') return { text: 'Ready', color: 'text-blue-400 bg-blue-400/10 border-blue-400/20', Icon: Database, spin: false };
+    if (appState === 'initializing') return { text: 'Initializing', color: 'text-purple-400 bg-purple-400/10 border-purple-400/20', Icon: Loader2, spin: true };
     return { text: 'Active', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20', Icon: CheckCircle2, spin: false };
   };
   const statusConfig = getStatusBadge();
@@ -518,49 +520,88 @@ CRITICAL INSTRUCTIONS:
   return (
     <div className="flex h-screen w-screen bg-[#050505] text-white font-open-sans overflow-hidden">
       
-      {/* === NEW: WebGPU Hardware Warning Modal === */}
+      {/* PREMIUM SETTINGS / HARDWARE MODAL */}
       <AnimatePresence>
-        {warningAccepted === false && (
+        {(warningAccepted === false || showSettingsModal) && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-6">
-             <div className="bg-[#121212] border border-white/10 p-8 rounded-2xl shadow-2xl max-w-lg w-full">
-                <div className="flex items-center space-x-3 mb-5">
-                   <div className="p-3 bg-amber-500/10 rounded-full border border-amber-500/20">
-                      <AlertTriangle className="w-6 h-6 text-amber-500" />
+             <div className="bg-[#121212] border border-white/10 p-8 rounded-2xl shadow-2xl max-w-2xl w-full relative">
+                
+                {showSettingsModal && (
+                   <button onClick={() => setShowSettingsModal(false)} className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                      <X className="w-5 h-5" />
+                   </button>
+                )}
+
+                <div className="flex items-center space-x-3 mb-6">
+                   <div className="p-3 bg-emerald-500/10 rounded-full border border-emerald-500/20">
+                      <Settings2 className="w-6 h-6 text-emerald-500" />
                    </div>
-                   <h2 className="font-outfit text-xl font-semibold text-white">System Resource Warning</h2>
+                   <h2 className="font-outfit text-2xl font-semibold text-white">Neural Engine Architecture</h2>
                 </div>
                 
-                <div className="space-y-4 text-[14.5px] leading-relaxed text-neutral-300">
-                   <p>
-                     Axiom-Zero runs a 1B-parameter Large Language Model <strong>entirely on your local hardware</strong> via WebGPU. This ensures complete privacy, but it is highly computationally intensive.
-                   </p>
-                   
-                   <div className="bg-white/5 p-4 rounded-lg border border-white/5">
-                      <p className="font-semibold text-white mb-2 text-sm uppercase tracking-wide">Recommended Specifications:</p>
-                      <ul className="list-disc pl-5 space-y-1 text-sm text-neutral-400">
-                         <li>Modern Desktop Browser (Chrome, Edge, Brave)</li>
-                         <li>Dedicated GPU (Nvidia/AMD) or Apple Silicon (M1+)</li>
-                         <li>At least 8GB of System RAM</li>
-                      </ul>
+                <div className="space-y-5">
+                   <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                      <div>
+                         <p className="text-[14.5px] leading-relaxed text-neutral-300">Select the AI model you want to run locally. Larger models offer significantly higher intelligence but require strict hardware limits.</p>
+                      </div>
+                      <div className="hidden sm:flex flex-col items-end shrink-0 ml-6">
+                         <span className="text-xs font-medium text-neutral-400 mb-1">Detected Hardware Tier:</span>
+                         <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1.5 rounded-md ${detectedTier === 'high' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/20' : detectedTier === 'mid' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/20' : 'bg-red-500/20 text-red-400 border border-red-500/20'}`}>Tier {detectedTier === 'high' ? '3 (High-End)' : detectedTier === 'mid' ? '2 (Standard)' : '1 (Low-VRAM)'}</span>
+                      </div>
                    </div>
 
-                   <p className="text-sm text-neutral-400 italic">
-                     Caution: If you are running on an older device or on battery power, you may experience severe system slowdowns or rapid battery drain during AI generation.
-                   </p>
+                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-2">
+                      {(Object.keys(AI_MODELS) as Array<'low' | 'mid' | 'high'>).map((key) => {
+                         const model = AI_MODELS[key];
+                         const isSelected = activeModelKey === key;
+                         return (
+                            <div 
+                               key={key} 
+                               onClick={() => setActiveModelKey(key)} 
+                               className={`relative flex flex-col p-5 rounded-xl border cursor-pointer transition-all duration-200 group ${isSelected ? 'border-emerald-500 bg-emerald-500/5 shadow-[0_0_20px_rgba(16,185,129,0.1)]' : 'border-white/10 hover:border-white/30 bg-black/40 hover:bg-black/60'}`}
+                            >
+                               <div className="flex justify-between items-start mb-3">
+                                  <h3 className={`font-outfit font-semibold text-lg ${isSelected ? 'text-emerald-400' : 'text-white group-hover:text-neutral-200'}`}>{model.name}</h3>
+                                  {isSelected ? (
+                                     <CheckCircle className="w-6 h-6 text-white fill-emerald-500" />
+                                  ) : (
+                                     <div className="w-6 h-6 rounded-full border border-white/20 group-hover:border-white/40 transition-colors" />
+                                  )}
+                               </div>
+                               
+                               <p className="text-[13px] text-neutral-400 mb-5">{model.desc}</p>
+                               
+                               <div className="mt-auto space-y-3 pt-4 border-t border-white/5">
+                                  <div className="flex items-center text-xs font-medium">
+                                     <Database className="w-3.5 h-3.5 mr-2 text-neutral-500" />
+                                     <span className="text-neutral-500">Allocates: </span>
+                                     <span className="text-neutral-300 ml-1.5">{model.vram}</span>
+                                  </div>
+                                  <div className="flex items-center text-xs font-medium">
+                                     <Cpu className="w-3.5 h-3.5 mr-2 text-neutral-500" />
+                                     <span className="text-neutral-500">Requires: </span>
+                                     <span className="text-neutral-300 ml-1.5">{model.minRam}</span>
+                                  </div>
+                               </div>
+                            </div>
+                         );
+                      })}
+                   </div>
                 </div>
 
-                <div className="mt-8 flex items-center justify-end space-x-4">
-                   <button onClick={() => window.history.back()} className="px-5 py-2.5 text-sm font-medium text-neutral-400 hover:text-white transition-colors">
-                      Go Back
-                   </button>
+                <div className="mt-8 flex items-center justify-end border-t border-white/10 pt-6">
                    <button 
                      onClick={() => {
                        localStorage.setItem('axiom_warning_accepted', 'true');
+                       if (activeModelKey !== localStorage.getItem('axiom_selected_model')) {
+                           handleModelSwap(activeModelKey);
+                       }
+                       setShowSettingsModal(false);
                        setWarningAccepted(true);
                      }} 
-                     className="px-5 py-2.5 text-sm font-medium bg-emerald-500 text-black hover:bg-emerald-400 rounded-lg shadow-md transition-colors"
+                     className="px-8 py-3 text-sm font-semibold bg-emerald-500 text-black hover:bg-emerald-400 rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all"
                    >
-                      I Understand, Proceed
+                      Confirm & Boot Engine
                    </button>
                 </div>
              </div>
@@ -573,7 +614,7 @@ CRITICAL INSTRUCTIONS:
           <motion.div initial={{ width: 0, opacity: 0 }} animate={{ width: 280, opacity: 1 }} exit={{ width: 0, opacity: 0 }} transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.8 }} className="h-full border-r border-white/5 bg-[#0a0a0a] flex flex-col flex-shrink-0 relative z-40 shadow-2xl">
             <div className="h-16 flex items-center justify-between px-6 flex-shrink-0 min-w-[280px]">
               <span className="font-outfit text-[11px] font-bold tracking-[0.2em] uppercase text-neutral-500">Workspace</span>
-              <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 rounded-md text-neutral-500 hover:text-white hover:bg-white/5 transition-colors" aria-label="Close Sidebar"><X className="w-5 h-5" /></button>
+              <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 rounded-md text-neutral-500 hover:text-white hover:bg-white/5 transition-colors"><X className="w-5 h-5" /></button>
             </div>
             <div className="px-4 pb-4 min-w-[280px]">
                <button onClick={clearWorkspace} className="w-full py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm text-white font-medium hover:bg-white/10 transition-colors flex items-center justify-center space-x-2"><Plus className="w-4 h-4" /><span>New Workspace</span></button>
@@ -589,21 +630,22 @@ CRITICAL INSTRUCTIONS:
                     <span className="text-sm truncate font-medium">{doc.name}</span>
                   </button>
                   <div className="hidden group-hover:flex items-center space-x-1 pl-2">
-                     <button onClick={(e) => shareChat(e, doc)} className="p-1 text-neutral-400 hover:text-emerald-400 transition-colors rounded hover:bg-white/10" title="Share Link"><Share2 className="w-3.5 h-3.5" /></button>
-                     <button onClick={(e) => exportChat(e, doc)} className="p-1 text-neutral-400 hover:text-emerald-400 transition-colors rounded hover:bg-white/10" title="Export Chat"><Download className="w-3.5 h-3.5" /></button>
-                     <button onClick={(e) => deleteChat(e, doc)} className="p-1 text-neutral-400 hover:text-red-400 transition-colors rounded hover:bg-red-500/10" title="Delete Document"><Trash2 className="w-3.5 h-3.5" /></button>
+                     <button onClick={(e) => deleteChat(e, doc)} className="p-1 text-neutral-400 hover:text-red-400 transition-colors rounded hover:bg-red-500/10"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
               ))}
             </div>
             
-            {/* === NEW: Help Page Link & Cache Button block === */}
             <div className="p-4 min-w-[280px] space-y-2 border-t border-white/5">
+              {/* === HELP & DOCS LINK RESTORED HERE === */}
               <a href="/help" target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center space-x-2 text-sm text-neutral-400 hover:text-white py-2.5 rounded-lg transition-all hover:bg-white/5">
                 <HelpCircle className="w-4 h-4" />
                 <span>Help & Documentation</span>
               </a>
-              <button onClick={async () => { await clearDB(); setSavedDocs([]); clearWorkspace(); }} className="w-full flex items-center justify-center space-x-2 text-sm text-neutral-500 hover:text-red-400 py-2.5 rounded-lg transition-all hover:bg-red-500/10"><Trash2 className="w-4 h-4" /><span>Clear Device Cache</span></button>
+              <button onClick={() => setShowSettingsModal(true)} className="w-full flex items-center justify-center space-x-2 text-sm text-neutral-400 hover:text-emerald-400 py-2.5 rounded-lg transition-all hover:bg-emerald-500/10 border border-transparent hover:border-emerald-500/20">
+                <SlidersHorizontal className="w-4 h-4" />
+                <span>Engine Settings</span>
+              </button>
             </div>
           </motion.div>
         )}
@@ -612,19 +654,55 @@ CRITICAL INSTRUCTIONS:
       <div className="flex-1 flex flex-col h-full min-w-0 bg-[#050505] relative">
         <div className="h-16 flex items-center justify-between px-6 bg-[#050505] z-30 shrink-0 border-b border-white/5">
           <div className="flex items-center space-x-4">
-            {!isSidebarOpen && <button onClick={() => setIsSidebarOpen(true)} className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-white/5 transition-colors" aria-label="Open Sidebar"><Menu className="w-5 h-5" /></button>}
+            {!isSidebarOpen && <button onClick={() => setIsSidebarOpen(true)} className="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-white/5 transition-colors"><Menu className="w-5 h-5" /></button>}
             <span className="font-outfit text-xl font-medium tracking-wide">Axiom-Zero</span>
           </div>
           
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-4">
+             <div className="relative">
+                <button 
+                   disabled={!engineReady} 
+                   onClick={() => setIsTopDropdownOpen(!isTopDropdownOpen)}
+                   className="flex items-center space-x-2 bg-neutral-900/40 border border-white/10 px-3 py-1.5 rounded-md hover:bg-white/5 transition-colors disabled:opacity-50"
+                >
+                   <Settings2 className="w-3.5 h-3.5 text-neutral-400" />
+                   <span className="text-xs text-neutral-300 font-medium">{AI_MODELS[activeModelKey]?.name || 'Model'}</span>
+                   <ChevronDown className={`w-3.5 h-3.5 text-neutral-500 transition-transform ${isTopDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                <AnimatePresence>
+                   {isTopDropdownOpen && (
+                      <>
+                         <div className="fixed inset-0 z-40" onClick={() => setIsTopDropdownOpen(false)} />
+                         <motion.div 
+                            initial={{ opacity: 0, y: -5 }} 
+                            animate={{ opacity: 1, y: 0 }} 
+                            exit={{ opacity: 0, y: -5 }}
+                            className="absolute top-full mt-2 right-0 w-56 bg-[#1a1a1a] border border-white/10 rounded-lg shadow-2xl z-50 overflow-hidden"
+                         >
+                            {(Object.keys(AI_MODELS) as Array<'low' | 'mid' | 'high'>).map((key) => (
+                               <button 
+                                  key={key} 
+                                  onClick={() => handleModelSwap(key)} 
+                                  className={`w-full text-left px-4 py-3 text-sm transition-colors border-b border-white/5 last:border-0 ${activeModelKey === key ? 'bg-emerald-500/10 text-emerald-400' : 'text-neutral-300 hover:bg-white/5'}`}
+                               >
+                                  <div className="flex items-center justify-between">
+                                     <span className="font-medium">{AI_MODELS[key].name}</span>
+                                     {activeModelKey === key && <CheckCircle2 className="w-4 h-4" />}
+                                  </div>
+                                  <div className="text-[10px] text-neutral-500 mt-0.5">{AI_MODELS[key].desc}</div>
+                               </button>
+                            ))}
+                         </motion.div>
+                      </>
+                   )}
+                </AnimatePresence>
+             </div>
+
              <motion.div layout className={`flex items-center space-x-2 px-3 py-1.5 rounded-md border ${statusConfig.color}`}>
                 <statusConfig.Icon className={`w-3.5 h-3.5 ${statusConfig.spin ? 'animate-spin' : ''}`} />
-                <span className="text-[10px] font-bold uppercase tracking-wider">{statusConfig.text} {(!engineReady || appState === 'initializing') && `${!engineReady ? engineProgressPercent : vectorProgress}%`}</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider hidden sm:inline">{statusConfig.text} {(!engineReady || appState === 'initializing') && `${!engineReady ? engineProgressPercent : vectorProgress}%`}</span>
              </motion.div>
-             <div className="hidden sm:flex items-center space-x-2 bg-neutral-900/40 border border-white/5 px-3 py-1.5 rounded-md">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
-                <span className="text-xs text-neutral-400 font-medium">Local Engine</span>
-             </div>
           </div>
         </div>
 
@@ -633,17 +711,11 @@ CRITICAL INSTRUCTIONS:
         ) : (
            <div className="flex-1 flex flex-row overflow-hidden relative w-full">
               
-              <div 
-                  className="hidden lg:flex h-full border-r border-white/5 flex-col bg-[#050505] shrink-0" 
-                  style={{ width: `${leftWidth}%` }}
-              >
+              <div className="hidden lg:flex h-full border-r border-white/5 flex-col bg-[#050505] shrink-0" style={{ width: `${leftWidth}%` }}>
                  <DocumentView ref={pdfViewerRef} pdfDocument={activePdfDocument} documentName={currentDocName} />
               </div>
               
-              <div 
-                 className="hidden lg:flex w-2 cursor-col-resize hover:bg-emerald-500/50 active:bg-emerald-500 transition-colors shrink-0 z-20 items-center justify-center group"
-                 onMouseDown={handleMouseDown}
-              >
+              <div className="hidden lg:flex w-2 cursor-col-resize hover:bg-emerald-500/50 active:bg-emerald-500 transition-colors shrink-0 z-20 items-center justify-center group" onMouseDown={handleMouseDown}>
                  <div className="w-0.5 h-8 bg-white/10 rounded-full group-hover:bg-white/50 transition-colors" />
               </div>
               
@@ -686,7 +758,7 @@ CRITICAL INSTRUCTIONS:
                                         </div>
 
                                         {msg.sources && msg.sources.length > 0 && (
-                                           <details className="mt-4 border-t border-white/5 pt-3"><summary className="text-xs text-neutral-500 font-medium cursor-pointer hover:text-neutral-300 transition-colors select-none flex items-center"><ArrowRight className="w-3 h-3 mr-1 inline transform transition-transform group-open:rotate-90" /> Verified Nodes ({msg.sources.length})</summary>
+                                           <details className="mt-4 border-t border-white/5 pt-3"><summary className="text-xs text-neutral-500 font-medium cursor-pointer hover:text-neutral-300 transition-colors select-none flex items-center"><ArrowRight className="w-3 h-3 mr-1 inline transform transition-transform group-open:rotate-90" /> Source Nodes ({msg.sources.length})</summary>
                                               <div className="mt-3 grid grid-cols-1 gap-3 border-l-2 border-white/10 pl-4 ml-1">
                                                  {msg.sources.map((src, i) => (
                                                     <div key={`source-${i}`} className="flex flex-col space-y-1">
@@ -709,46 +781,39 @@ CRITICAL INSTRUCTIONS:
                               <div className="flex gap-4 w-full min-w-0">
                                  <div className="w-7 h-7 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mt-1 flex-shrink-0"><Sparkles className="w-3.5 h-3.5 text-emerald-500" /></div>
                                  <div className="flex flex-col w-full min-w-0 group relative">
-                                    
-                                    {typingStatus && !streamingContent && (
-                                        <ProcessingIndicator status={typingStatus} />
-                                    )}
-
-                                    {streamingContent && (
-                                        <MessageWithThinking content={streamingContent} />
-                                    )}
-                                    
-                                    {streamingSources.length > 0 && streamingContent && (
-                                       <details className="mt-4 border-t border-white/5 pt-3"><summary className="text-xs text-neutral-500 font-medium cursor-pointer hover:text-neutral-300 transition-colors select-none flex items-center"><ArrowRight className="w-3 h-3 mr-1 inline transform transition-transform group-open:rotate-90" /> Verified Nodes ({streamingSources.length})</summary>
-                                          <div className="mt-3 grid grid-cols-1 gap-3 border-l-2 border-white/10 pl-4 ml-1">
-                                             {streamingSources.map((src, i) => (
-                                                <div key={`stream-source-${i}`} className="flex flex-col space-y-1">
-                                                    <button onClick={() => pdfViewerRef.current?.setPage(src.pageNumber)} className="w-fit text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded uppercase font-semibold hover:bg-emerald-500/20 transition-colors">Page {src.pageNumber}</button>
-                                                   <p className="text-sm text-neutral-400 leading-relaxed line-clamp-3">"{src.text}"</p>
-                                                </div>
-                                             ))}
-                                          </div>
-                                       </details>
-                                    )}
+                                    {typingStatus && !streamingContent && <ProcessingIndicator status={typingStatus} />}
+                                    {streamingContent && <MessageWithThinking content={streamingContent} />}
                                  </div>
                               </div>
                            </motion.div>
                         )}
-                        
                         <div ref={messagesEndRef} className="h-6 shrink-0 w-full" />
                     </div>
                  </div>
 
+                 {/* === FIX 3: DOWNLOAD SPEED EXPLANATION IN OVERLAY === */}
                  <div className="absolute bottom-28 left-0 right-0 flex justify-center pointer-events-none z-50">
                     <AnimatePresence>
-                      {(!engineReady || appState === 'initializing') && (
-                        <motion.div initial={{ opacity: 0, y: 15, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} transition={{ type: "spring", stiffness: 300, damping: 25 }} className="bg-[#1a1a1a] border border-white/10 shadow-2xl rounded-2xl p-4 flex flex-col space-y-3 pointer-events-auto min-w-[260px]">
+                      {(!engineReady && warningAccepted) && (
+                        <motion.div initial={{ opacity: 0, y: 15, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} transition={{ type: "spring", stiffness: 300, damping: 25 }} className="bg-[#1a1a1a] border border-white/10 shadow-2xl rounded-2xl p-4 flex flex-col space-y-3 pointer-events-auto min-w-[300px]">
                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-neutral-300 font-medium flex items-center tracking-wide"><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin text-emerald-500"/> {!engineReady ? 'Downloading Engine...' : 'Mapping Document...'}</span>
-                              <span className="text-xs font-mono text-emerald-500 font-semibold">{!engineReady ? engineProgressPercent : vectorProgress}%</span>
+                              <span className="text-xs text-neutral-300 font-medium flex items-center tracking-wide"><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin text-emerald-500"/> {`Downloading ${AI_MODELS[activeModelKey]?.name || 'Engine'}...`}</span>
+                              <span className="text-xs font-mono text-emerald-500 font-semibold">{engineProgressPercent}%</span>
                            </div>
                            <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-                             <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${!engineReady ? engineProgressPercent : vectorProgress}%` }} />
+                             <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${engineProgressPercent}%` }} />
+                           </div>
+                           <p className="text-[10px] text-neutral-500 italic mt-1 text-center">First-time load requires a full network download. Speeds depend entirely on your internet connection (usually 1-4 mins).</p>
+                        </motion.div>
+                      )}
+                      {(engineReady && appState === 'initializing') && (
+                        <motion.div initial={{ opacity: 0, y: 15, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} transition={{ type: "spring", stiffness: 300, damping: 25 }} className="bg-[#1a1a1a] border border-white/10 shadow-2xl rounded-2xl p-4 flex flex-col space-y-3 pointer-events-auto min-w-[260px]">
+                           <div className="flex items-center justify-between">
+                              <span className="text-xs text-neutral-300 font-medium flex items-center tracking-wide"><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin text-emerald-500"/> Mapping Vectors...</span>
+                              <span className="text-xs font-mono text-emerald-500 font-semibold">{vectorProgress}%</span>
+                           </div>
+                           <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                             <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${vectorProgress}%` }} />
                            </div>
                         </motion.div>
                       )}
@@ -757,15 +822,15 @@ CRITICAL INSTRUCTIONS:
 
                  <div className="w-full p-6 pt-4 bg-[#050505] border-t border-white/5 flex flex-col items-center shrink-0 z-20 relative">
                     <form onSubmit={handleSearch} className="w-full max-w-3xl relative flex items-center bg-[#1a1a1a] border border-white/10 rounded-xl p-1.5 shadow-xl focus-within:border-emerald-500/50 transition-colors">
-                       <input ref={inputRef} type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} disabled={isTyping || !engineReady || appState === 'initializing'} placeholder={!engineReady ? "Initializing WebGPU Engine..." : isTyping ? "Synthesizing response..." : "Ask Axiom-Zero..."} className="flex-1 bg-transparent text-white text-[15px] py-3.5 px-4 outline-none disabled:opacity-50 placeholder:text-neutral-500 font-open-sans" />
+                       <input ref={inputRef} type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} disabled={isTyping || !engineReady || appState === 'initializing'} placeholder={!engineReady ? `Initializing ${AI_MODELS[activeModelKey]?.name || 'Engine'}...` : isTyping ? "Synthesizing response..." : "Ask Axiom-Zero..."} className="flex-1 bg-transparent text-white text-[15px] py-3.5 px-4 outline-none disabled:opacity-50 placeholder:text-neutral-500 font-open-sans" />
                        
                        {isTyping ? (
                            <button type="button" onClick={stopGeneration} className="p-3 mr-1 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-all border border-red-500/20" title="Stop Generation"><Square className="w-4 h-4 fill-current" /></button>
                        ) : (
-                           <button type="submit" disabled={!searchQuery.trim() || !engineReady || appState === 'initializing'} className="p-3 mr-1 rounded-lg bg-emerald-500 text-black hover:bg-emerald-400 transition-all disabled:opacity-50 disabled:bg-neutral-800 disabled:text-neutral-500 shadow-md" aria-label="Send Query"><Zap className="w-4 h-4 fill-current" /></button>
+                           <button type="submit" disabled={!searchQuery.trim() || !engineReady || appState === 'initializing'} className="p-3 mr-1 rounded-lg bg-emerald-500 text-black hover:bg-emerald-400 transition-all disabled:opacity-50 disabled:bg-neutral-800 disabled:text-neutral-500 shadow-md"><Zap className="w-4 h-4 fill-current" /></button>
                        )}
                     </form>
-                    <div className="mt-3 text-[10.5px] text-neutral-600 text-center font-medium tracking-wide">Axiom-Zero runs 100% locally. No data leaves your device.</div>
+                    <div className="mt-3 text-[10.5px] text-neutral-600 text-center font-medium tracking-wide">Axiom-Zero runs {AI_MODELS[activeModelKey]?.name || 'Models'} 100% locally. No data leaves your device.</div>
                  </div>
               </div>
            </div>
@@ -774,5 +839,3 @@ CRITICAL INSTRUCTIONS:
     </div>
   );
 }
-
-
