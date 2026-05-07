@@ -36,7 +36,7 @@ Because Axiom-Zero runs locally, you can clone and run it in minutes.
 You **must** use a modern desktop browser with WebGPU enabled (Google Chrome, Microsoft Edge, or Brave). Safari and mobile browsers do not currently have full WebGPU support.
  1. **Clone the repository:**
    ```bash
-   git clone https://github.com/vikasrntrprnr-stack/axiom-zero.git
+   git clone https://github.com/vikasentrprnr-stack/axiom-zero.git
    cd axiom-zero
    
    ```
