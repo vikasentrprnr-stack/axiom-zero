@@ -13,6 +13,7 @@
     "@mlc-ai/web-llm": "^0.2.83",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
+    "html2pdf.js": "^0.14.0",
     "idb": "^8.0.3",
     "katex": "^0.16.45",
     "lucide-react": "^1.14.0",
