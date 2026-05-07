@@ -1,11 +1,12 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import { Sparkles, User, FileText, ShieldCheck, Download } from 'lucide-react';
+import { useEffect, useState, Suspense } from 'react';
+import { Sparkles, User, FileText, ShieldCheck, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
-export default function SharedChatViewer() {
+// 1. Separate the main logic into a child component
+function SharedChatContent() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<{ title: string, author: string, chat: any[] } | null>(null);
   const [error, setError] = useState(false);
@@ -95,5 +96,18 @@ export default function SharedChatViewer() {
          You are viewing a shared snapshot of an Axiom-Zero local session.
       </div>
     </div>
+  );
+}
+
+// 2. Wrap the component in a Suspense boundary for Vercel
+export default function SharedChatViewer() {
+  return (
+    <Suspense fallback={
+      <div className="flex h-screen w-screen bg-[#050505] text-white items-center justify-center">
+        <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+      </div>
+    }>
+      <SharedChatContent />
+    </Suspense>
   );
 }
