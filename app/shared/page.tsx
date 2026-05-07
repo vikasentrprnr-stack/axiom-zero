@@ -46,9 +46,11 @@ function SharedChatContent() {
       
       {/* Premium Header */}
       <header className="h-16 border-b border-white/5 flex items-center justify-between px-8 bg-[#0a0a0a] shrink-0">
-        <div className="flex items-center space-x-3">
-           <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-blue-400" />
+      <div className="flex items-center space-x-3">
+           {/* Custom Axiom-Zero Logo */}
+           <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0">
+              {/* Change .png to .svg or .jpg if your file format is different */}
+              <img src="/icon.png" alt="Axiom-Zero Logo" className="w-full h-full object-cover" />
            </div>
            <span className="font-semibold text-lg tracking-tight">Axiom-Zero <span className="text-zinc-600 font-normal">| Shared Workspace</span></span>
         </div>
