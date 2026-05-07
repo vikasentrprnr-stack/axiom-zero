@@ -1,8 +1,8 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { CreateMLCEngine, MLCEngine } from '@mlc-ai/web-llm';
-import { Zap, Sparkles, Copy, Square, CheckCheck, Menu, X, FileText, Trash2, Plus, ArrowRight, BrainCircuit, ChevronRight, RefreshCw, Pencil, Loader2, Database, Cpu, CheckCircle2, Download, HelpCircle, AlertTriangle, Settings2, SlidersHorizontal, CheckCircle, ChevronDown, ArrowUp, ThumbsUp, ThumbsDown, Clock, Info } from 'lucide-react';
+import { CreateWebWorkerMLCEngine, MLCEngineInterface } from '@mlc-ai/web-llm';
+import { Zap, Sparkles, Copy, Square, CheckCheck, Menu, X, FileText, Trash2, Plus, ArrowRight, BrainCircuit, ChevronRight, RefreshCw, Pencil, Loader2, Database, Cpu, CheckCircle2, Download, HelpCircle, AlertTriangle, Settings2, SlidersHorizontal, CheckCircle, ChevronDown, ArrowUp, ThumbsUp, ThumbsDown, Clock, Info, MonitorSmartphone } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import ReactMarkdown from 'react-markdown';
@@ -20,7 +20,7 @@ import { DocumentViewerHandle } from '@/components/DocumentView';
 const FileDropzone = dynamic(() => import('@/components/FileDropzone'), { ssr: false });
 const DocumentView = dynamic(() => import('@/components/DocumentView'), { ssr: false });
 
-type ModelTier = 'low' | 'mid' | 'high';
+type ModelTier = 'mid' | 'high';
 
 interface AIModelConfig {
   id: string;
@@ -30,14 +30,8 @@ interface AIModelConfig {
   minRam: string;
 }
 
+// Removed Llama 1B. Only Gamma 2 and Llama 3B remain.
 const AI_MODELS: Record<ModelTier, AIModelConfig> = {
-  'low': { 
-      id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', 
-      name: 'Llama 3.2 (1B)', 
-      desc: 'Maximum Speed • Basic RAG', 
-      vram: '~850MB', 
-      minRam: '4GB System RAM' 
-  },
   'mid': { 
       id: 'gemma-2-2b-it-q4f16_1-MLC', 
       name: 'Gemma 2 (2B)', 
@@ -57,7 +51,7 @@ const AI_MODELS: Record<ModelTier, AIModelConfig> = {
 const LOADING_FACTS = [
   "Axiom-Zero runs entirely on your local GPU. Zero data is sent to the cloud.",
   "Large language models predict the next word based on billions of parameters.",
-  "WebGPU allows your browser to execute parallel computations at native speeds.",
+  "Web Workers allow your browser to execute parallel computations without freezing the UI.",
   "Quantization reduces model size by 4x without significantly dropping intelligence.",
   "Semantic search maps words into 3D mathematical space to find exact context matches."
 ];
@@ -199,6 +193,7 @@ export default function Home() {
   const [leftWidth, setLeftWidth] = useState(40); 
 
   const [engineReady, setEngineReady] = useState(false);
+  const [isCachedLoad, setIsCachedLoad] = useState(false); // Fixes the giant modal loop
   const [engineProgressText, setEngineProgressText] = useState('Initializing Engine...');
   const [engineProgressPercent, setEngineProgressPercent] = useState(0);
   const [downloadTimeLeft, setDownloadTimeLeft] = useState<string>('Calculating...');
@@ -207,13 +202,15 @@ export default function Home() {
   const [factIndex, setFactIndex] = useState(0);
 
   const [browserSupported, setBrowserSupported] = useState<boolean | null>(null);
+  const [isMobile, setIsMobile] = useState<boolean | null>(null);
   const [warningAccepted, setWarningAccepted] = useState<boolean | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
-  const [detectedTier, setDetectedTier] = useState<ModelTier>('low');
-  const [activeModelKey, setActiveModelKey] = useState<ModelTier>('low');
+  const [detectedTier, setDetectedTier] = useState<ModelTier>('mid');
+  const [activeModelKey, setActiveModelKey] = useState<ModelTier>('mid');
   const [isTopDropdownOpen, setIsTopDropdownOpen] = useState(false);
+  const [pendingIngestion, setPendingIngestion] = useState<{chunks: TextChunk[], file: File} | null>(null); // For Model Selection Flow
 
-  const engineRef = useRef<MLCEngine | null>(null);
+  const engineRef = useRef<MLCEngineInterface | null>(null);
   const embedWorker = useRef<Worker | null>(null);
   const documentVectorsRef = useRef<any[]>([]);
   const latestQueryRef = useRef('');
@@ -228,12 +225,27 @@ export default function Home() {
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages, streamingContent, isTyping, typingStatus]);
 
+  // Persistent Sidebar State
+  useEffect(() => {
+     if(localStorage.getItem('axiom_sidebar_closed') === 'true') {
+         setIsSidebarOpen(false);
+     }
+  }, []);
+
+  const toggleSidebar = () => {
+     setIsSidebarOpen(prev => {
+         const newState = !prev;
+         localStorage.setItem('axiom_sidebar_closed', (!newState).toString());
+         return newState;
+     });
+  };
+
   // === UI LOAD DOCUMENT (RESTORED) ===
   const handleLoadDocument = useCallback(async (doc: any) => {
     documentVectorsRef.current = doc.vectors || []; 
     setCurrentDocName(doc.name); 
     setCurrentDocId(doc.id);
-    localStorage.setItem('axiom_current_doc_id', doc.id); // Save state for refresh
+    localStorage.setItem('axiom_current_doc_id', doc.id); 
     
     const pdfjs = await import('pdfjs-dist');
     pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -247,9 +259,8 @@ export default function Home() {
     } catch (e) { alert("Failed to render document from cache."); }
   }, []);
 
-  // === APP INITIALIZATION & PERSISTENT ROUTING ===
+  // === APP INITIALIZATION ===
   useEffect(() => {
-    // 1. Fetch DB and Handle Routing
     getAllSavedDocuments().then(docs => {
        setSavedDocs(docs);
        const lastDocId = localStorage.getItem('axiom_current_doc_id');
@@ -260,35 +271,55 @@ export default function Home() {
        }
     });
 
-    // 2. Fact Rotator
     let interval: NodeJS.Timeout;
     if (!engineReady && warningAccepted) {
       interval = setInterval(() => setFactIndex(prev => (prev + 1) % LOADING_FACTS.length), 6000);
     }
 
-    // 3. Hardware Checks
     const checkEnvironment = async () => {
-      const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-      if (isSafari || !navigator.gpu) {
+      const userAgent = typeof window.navigator === "undefined" ? "" : navigator.userAgent;
+      const mobile = Boolean(userAgent.match(/Android|BlackBerry|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i));
+      setIsMobile(mobile);
+
+      const isSafari = /^((?!chrome|android).)*safari/i.test(userAgent);
+      if (mobile || isSafari || !navigator.gpu) {
           setBrowserSupported(false);
           return;
       }
       setBrowserSupported(true);
 
-      let tier: ModelTier = 'low';
+      // --- ROBUST HARDWARE DETECTION ---
+      let tier: ModelTier = 'mid'; // Always default to safe 2B model
       try {
+        // 1. Check physical system RAM (returns 4, 8, 16, 32, etc.)
+        const systemRam = (navigator as any).deviceMemory; 
+        
+        // 2. Check WebGPU adapter limits
         const adapter = await (navigator as any).gpu.requestAdapter();
+
         if (adapter) {
-          const maxBindingSize = adapter.limits.maxStorageBufferBindingSize;
-          if (maxBindingSize >= 1073741824) tier = 'high'; 
-          else if (maxBindingSize >= 536870912) tier = 'mid'; 
+          // Strict Guard: Must have more than 8GB of RAM to get the 3B model
+          if (systemRam && systemRam > 8) {
+             tier = 'high';
+          } 
+          // Fallback: If deviceMemory is blocked by privacy settings, check for massive dedicated GPU buffers (2GB+)
+          else if (!systemRam && adapter.limits.maxBufferSize >= 2147483648) {
+             tier = 'high';
+          }
         }
-      } catch (e) { console.error(e); }
+      } catch (e) { 
+        console.error("Hardware scan failed, safely defaulting to Mid-Tier."); 
+      }
 
       setDetectedTier(tier);
       const accepted = localStorage.getItem('axiom_warning_accepted') === 'true';
       const savedModel = localStorage.getItem('axiom_selected_model') as ModelTier;
-      setActiveModelKey(AI_MODELS[savedModel] ? savedModel : tier);
+      
+      if (savedModel && AI_MODELS[savedModel]) {
+         setActiveModelKey(savedModel);
+      } else {
+         setActiveModelKey(tier);
+      }
       setWarningAccepted(accepted);
     };
     checkEnvironment();
@@ -305,17 +336,20 @@ export default function Home() {
   useEffect(() => {
     if (currentDocId && messages.length > 0 && !isTyping) {
         updateDocumentMessages(currentDocId, messages).then(() => {
-            getAllSavedDocuments().then(setSavedDocs); // Refresh sidebar ordering
+            getAllSavedDocuments().then(setSavedDocs); 
         });
     }
   }, [messages, currentDocId, isTyping]);
 
+  // === MULTI-THREADED ENGINE INITIALIZATION ===
   const initWebLLM = useCallback(async (modelKey: ModelTier) => {
     setEngineReady(false);
     downloadStartTimeRef.current = Date.now();
     
     try {
-      const newEngine = await CreateMLCEngine(AI_MODELS[modelKey].id, { 
+      const worker = new Worker(new URL('../lib/llm-worker.ts', import.meta.url), { type: 'module' });
+      
+      const newEngine = await CreateWebWorkerMLCEngine(worker, AI_MODELS[modelKey].id, { 
           initProgressCallback: (progress) => {
              const pct = Math.round(progress.progress * 100) || 0;
              setEngineProgressPercent(pct);
@@ -323,6 +357,13 @@ export default function Home() {
              let cleanText = progress.text.replace(/\[.*?\]\s*/g, '');
              if (cleanText.length > 50) cleanText = cleanText.substring(0, 50) + '...';
              setEngineProgressText(cleanText);
+
+             // SMART CACHE DETECTION: Subtly hide the giant modal if loading from cache
+             if (progress.text.toLowerCase().includes('cache')) {
+                 setIsCachedLoad(true);
+             } else {
+                 setIsCachedLoad(false);
+             }
 
              if (pct > 5 && pct < 100 && downloadStartTimeRef.current) {
                  const elapsed = (Date.now() - downloadStartTimeRef.current) / 1000; 
@@ -334,20 +375,24 @@ export default function Home() {
                  setDownloadTimeLeft('Finalizing architecture...');
              }
           }
+      }, {
+          // CRITICAL FIX: Restrict memory context to prevent Llama 3B from crashing Windows GPU
+          context_window_size: 2048 
       });
       engineRef.current = newEngine;
       setEngineReady(true);
     } catch (err: any) {
       console.error(err);
       alert(`Model Initialization Failed.\n\nAuto-reverting to the stable fallback engine to prevent crash.`);
-      setActiveModelKey('low');
-      localStorage.setItem('axiom_selected_model', 'low');
+      setActiveModelKey('mid');
+      localStorage.setItem('axiom_selected_model', 'mid');
       window.location.reload();
     }
   }, []);
 
+  // ONLY auto-initialize if they have already accepted the warning in the past
   useEffect(() => {
-    if (warningAccepted === true && browserSupported === true && !engineRef.current && !showSettingsModal) {
+    if (warningAccepted === true && browserSupported === true && !engineRef.current && !showSettingsModal && localStorage.getItem('axiom_selected_model')) {
         initWebLLM(activeModelKey);
     }
   }, [warningAccepted, browserSupported, showSettingsModal, activeModelKey, initWebLLM]);
@@ -443,22 +488,32 @@ Your goal is to answer the user's question exhaustively using the provided conte
     return () => { if (embedWorker.current) embedWorker.current.terminate(); };
   }, []);
 
+  const processDocumentIngestion = async (chunks: TextChunk[], file: File) => {
+     const buf = await file.arrayBuffer();
+     const pdfjs = await import('pdfjs-dist');
+     pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+     try {
+       const doc = await pdfjs.getDocument({ data: buf.slice(0) }).promise;
+       setActivePdfDocument(doc); setCurrentDocName(chunks[0].documentName);
+       const newId = chunks[0].documentName+'-'+Date.now();
+       setCurrentDocId(newId);
+       localStorage.setItem('axiom_current_doc_id', newId); 
+       setAppState('initializing'); setVectorProgress(0);
+       embedWorker.current?.postMessage({ type: 'EMBED_CHUNKS', chunks });
+       await saveDocument(newId, chunks[0].documentName, chunks, [], buf, []); 
+       setSavedDocs(await getAllSavedDocuments());
+     } catch (e) { alert("PDF Rendering Failed. Please ensure the file is a valid, text-selectable PDF."); }
+  };
+
   // === UI HANDLERS ===
   const handleIngestionComplete = async (chunks: TextChunk[], file: File) => {
-    const buf = await file.arrayBuffer();
-    const pdfjs = await import('pdfjs-dist');
-    pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-    try {
-      const doc = await pdfjs.getDocument({ data: buf.slice(0) }).promise;
-      setActivePdfDocument(doc); setCurrentDocName(chunks[0].documentName);
-      const newId = chunks[0].documentName+'-'+Date.now();
-      setCurrentDocId(newId);
-      localStorage.setItem('axiom_current_doc_id', newId); // Save state
-      setAppState('initializing'); setVectorProgress(0);
-      embedWorker.current?.postMessage({ type: 'EMBED_CHUNKS', chunks });
-      await saveDocument(newId, chunks[0].documentName, chunks, [], buf, []); 
-      setSavedDocs(await getAllSavedDocuments());
-    } catch (e) { alert("PDF Rendering Failed. Please ensure the file is a valid, text-selectable PDF."); }
+    // If user has never selected a model, force them to choose before processing
+    if (!localStorage.getItem('axiom_selected_model')) {
+        setPendingIngestion({ chunks, file });
+        setShowSettingsModal(true);
+        return;
+    }
+    await processDocumentIngestion(chunks, file);
   };
 
   const handleSearch = (e: React.FormEvent) => {
@@ -510,9 +565,9 @@ Your goal is to answer the user's question exhaustively using the provided conte
   const deleteChat = async (e: React.MouseEvent, doc: any) => {
     e.stopPropagation();
     try {
-        setSavedDocs(prev => prev.filter(d => d.id !== doc.id)); // Instantly hide from UI
+        setSavedDocs(prev => prev.filter(d => d.id !== doc.id)); 
         if (currentDocId === doc.id) { clearWorkspace(); }
-        await deleteDocument(doc.id); // Permanently delete from DB
+        await deleteDocument(doc.id); 
     } catch (err) { console.error("Local DB delete error", err); }
   };
 
@@ -540,7 +595,7 @@ Your goal is to answer the user's question exhaustively using the provided conte
      setMessages([]); 
      setActivePdfDocument(null); 
      setCurrentDocId(''); 
-     localStorage.removeItem('axiom_current_doc_id'); // Wipe state so refresh stays on dropzone
+     localStorage.removeItem('axiom_current_doc_id'); 
   };
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -561,6 +616,20 @@ Your goal is to answer the user's question exhaustively using the provided conte
     };
     window.addEventListener('mousemove', handleMouseMove); window.addEventListener('mouseup', handleMouseUp);
   }, []);
+
+  // --- RENDERING GUARDS ---
+  if (isMobile) {
+    return (
+      <div className="flex h-screen w-screen bg-[#050505] text-white items-center justify-center p-6 font-sans">
+        <div className="max-w-md text-center space-y-6">
+           <MonitorSmartphone className="w-16 h-16 text-blue-500 mx-auto opacity-80" />
+           <h2 className="text-3xl font-semibold tracking-tight">Desktop Required</h2>
+           <p className="text-zinc-400 leading-relaxed font-light">Axiom-Zero runs large Neural Networks entirely on your local GPU. Mobile devices do not possess the architectural memory required to execute this safely.</p>
+           <div className="inline-block px-4 py-2 rounded-full bg-white/5 border border-white/10 text-sm text-zinc-300">Please visit this URL on your PC or Mac.</div>
+        </div>
+      </div>
+    );
+  }
 
   if (browserSupported === false) {
      return (
@@ -607,7 +676,7 @@ Your goal is to answer the user's question exhaustively using the provided conte
                       </div>
                    </div>
 
-                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       {(Object.keys(AI_MODELS) as Array<ModelTier>).map((key) => {
                          const model = AI_MODELS[key];
                          const isSelected = activeModelKey === key;
@@ -645,14 +714,19 @@ Your goal is to answer the user's question exhaustively using the provided conte
                    <button 
                      onClick={() => {
                        localStorage.setItem('axiom_warning_accepted', 'true');
-                       if (activeModelKey !== localStorage.getItem('axiom_selected_model')) {
-                           setIsTopDropdownOpen(false); 
-                           localStorage.setItem('axiom_selected_model', activeModelKey);
-                           setEngineReady(false);
-                           initWebLLM(activeModelKey);
-                       }
+                       localStorage.setItem('axiom_selected_model', activeModelKey);
+                       setIsTopDropdownOpen(false); 
                        setShowSettingsModal(false);
                        setWarningAccepted(true);
+                       
+                       // Start engine
+                       initWebLLM(activeModelKey);
+
+                       // If they were waiting to ingest a PDF, resume it now
+                       if (pendingIngestion) {
+                           processDocumentIngestion(pendingIngestion.chunks, pendingIngestion.file);
+                           setPendingIngestion(null);
+                       }
                      }} 
                      className="px-8 py-3 text-[14px] font-semibold bg-white text-black hover:bg-zinc-200 rounded-lg shadow-xl transition-all"
                    >
@@ -670,7 +744,7 @@ Your goal is to answer the user's question exhaustively using the provided conte
           <motion.div initial={{ width: 0, opacity: 0 }} animate={{ width: 280, opacity: 1 }} exit={{ width: 0, opacity: 0 }} transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.8 }} className="h-full border-r border-white/5 bg-[#0a0a0a] flex flex-col flex-shrink-0 relative z-40">
             <div className="h-16 flex items-center justify-between px-6 flex-shrink-0 min-w-[280px] border-b border-white/5">
               <span className="font-outfit text-[11px] font-bold tracking-[0.2em] uppercase text-zinc-500">Workspace</span>
-              <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 rounded-md text-zinc-500 hover:text-white hover:bg-white/5 transition-colors"><X className="w-4 h-4" /></button>
+              <button onClick={toggleSidebar} className="p-1.5 rounded-md text-zinc-500 hover:text-white hover:bg-white/5 transition-colors"><X className="w-4 h-4" /></button>
             </div>
             <div className="p-4 min-w-[280px]">
                <button onClick={clearWorkspace} className="w-full py-2.5 bg-blue-500/10 border border-blue-500/20 rounded-lg text-sm text-blue-400 font-medium hover:bg-blue-500/20 transition-colors flex items-center justify-center space-x-2"><Plus className="w-4 h-4" /><span>New Chat</span></button>
@@ -709,7 +783,7 @@ Your goal is to answer the user's question exhaustively using the provided conte
         {/* HEADER */}
         <div className="h-16 flex items-center justify-between px-6 bg-[#050505] border-b border-white/5 shrink-0 z-20">
           <div className="flex items-center space-x-4">
-            {!isSidebarOpen && <button onClick={() => setIsSidebarOpen(true)} className="p-1.5 rounded-md text-zinc-500 hover:text-white hover:bg-white/5 transition-colors"><Menu className="w-5 h-5" /></button>}
+            {!isSidebarOpen && <button onClick={toggleSidebar} className="p-1.5 rounded-md text-zinc-500 hover:text-white hover:bg-white/5 transition-colors"><Menu className="w-5 h-5" /></button>}
             <span className="font-outfit text-lg font-semibold tracking-wide text-zinc-100">Axiom-Zero</span>
           </div>
           
@@ -743,7 +817,7 @@ Your goal is to answer the user's question exhaustively using the provided conte
              <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-md border transition-colors duration-300 ${!engineReady ? 'border-amber-500/20 bg-amber-500/10 text-amber-400' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'}`}>
                 <div className={`w-1.5 h-1.5 rounded-full ${!engineReady ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
                 <span className="text-[10px] font-bold uppercase tracking-wider hidden sm:inline whitespace-nowrap">
-                   {engineReady ? 'Active' : 'Occupying System'}
+                   {engineReady ? 'Active' : `${engineProgressPercent}% Allocating`}
                 </span>
              </div>
           </div>
@@ -835,10 +909,10 @@ Your goal is to answer the user's question exhaustively using the provided conte
                     </div>
                  </div>
 
-                 {/* OVERLAY */}
+                 {/* OVERLAY: Only shows if it's a real download, hides completely if restoring from cache */}
                  <div className="absolute bottom-24 left-0 right-0 flex justify-center pointer-events-none z-50">
                     <AnimatePresence>
-                      {(!engineReady && warningAccepted && !showSettingsModal) && (
+                      {(!engineReady && warningAccepted && !showSettingsModal && !isCachedLoad) && (
                         <motion.div initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 15, scale: 0.95 }} transition={{ type: "spring", stiffness: 300, damping: 25 }} className="bg-[#121212]/95 backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl p-5 flex flex-col pointer-events-auto min-w-[360px] max-w-[400px]">
                            <div className="flex items-center justify-between mb-4">
                               <div className="flex items-center space-x-2.5">
