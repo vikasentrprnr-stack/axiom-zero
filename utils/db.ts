@@ -2,7 +2,7 @@
 
 const DB_NAME = 'AxiomZeroDB';
 const STORE_NAME = 'documents';
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 
 /**
  * Initializes the Native IndexedDB connection.
